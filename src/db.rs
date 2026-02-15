@@ -133,6 +133,32 @@ impl Engine {
         Ok(log_record.value.into())
     }
 
+    /// 根据 key 删除对应的数据
+    pub fn delete(&self, key: &Bytes) -> Result<(), AppError> {
+        // 判读 key 的有效性
+        if key.is_empty() {
+            return Err(AppError::KeyIsEmpty);
+        }
+
+        // 从内存索引当中取出对应的数据，不存在的话直接返回
+        if self.index.get(key).is_none() {
+            return Ok(());
+        };
+
+        // 构造 LogRecord，标识其被删除
+        let log_record = LogRecord::new(key.to_vec(), Default::default(), LogRecordType::Delete);
+
+        // 写入到数据文件当中
+        self.append_log_record(&log_record)?;
+
+        // 删除内存索引中对应的 key
+        if !self.index.delete(key) {
+            return Err(AppError::IndexUpdateFailed);
+        }
+
+        Ok(())
+    }
+
     /// 追加写到活跃数据文件中
     fn append_log_record(&self, log_record: &LogRecord) -> Result<LogRecordPos, AppError> {
         let dir_path = self.options.dir_path.clone();
@@ -208,12 +234,16 @@ impl Engine {
                 // 构建内存索引
                 let log_record_pos = LogRecordPos::new(*file_id, offset);
 
-                match log_record.rec_type {
+                let ret = match log_record.rec_type {
                     LogRecordType::Normal => {
                         self.index.put(log_record.key.to_vec(), log_record_pos)
                     }
                     LogRecordType::Delete => self.index.delete(&log_record.key),
                 };
+
+                if !ret {
+                    return Err(AppError::IndexUpdateFailed);
+                }
 
                 // 递增 offset，下一次读取的时候从新的位置开始
                 offset += size;

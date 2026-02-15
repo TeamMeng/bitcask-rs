@@ -43,4 +43,7 @@ pub enum AppError {
 
     #[error("read data file eof")]
     ReadDataFileEOF,
+
+    #[error("index update failed")]
+    IndexUpdateFailed,
 }
