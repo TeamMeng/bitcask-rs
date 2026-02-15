@@ -46,4 +46,16 @@ pub enum AppError {
 
     #[error("index update failed")]
     IndexUpdateFailed,
+
+    #[error("invalid path")]
+    InvalidPath,
+
+    #[error("decode error")]
+    DecodeError,
+
+    #[error("get value failed")]
+    GetValueFailed,
+
+    #[error("invalid crc value, log record maybe corrupted")]
+    InvalidLogRecordCrc,
 }

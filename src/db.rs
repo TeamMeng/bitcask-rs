@@ -246,7 +246,7 @@ impl Engine {
                 }
 
                 // 递增 offset，下一次读取的时候从新的位置开始
-                offset += size;
+                offset += size as u64;
             }
             // 设置活跃文件的 offset
             if i == self.file_ids.len() - 1 {

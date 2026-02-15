@@ -1,3 +1,6 @@
+use prost::length_delimiter_len;
+use std::mem;
+
 /// 写入到数据文件的记录，追加写入的数据类似日志的格式
 pub struct LogRecord {
     pub(crate) key: Vec<u8>,
@@ -26,7 +29,12 @@ pub enum LogRecordType {
 /// 从数据文件中读取的 log_record 信息，包含其 size
 pub struct ReadLogRecord {
     pub(crate) record: LogRecord,
-    pub(crate) size: u64,
+    pub(crate) size: usize,
+}
+
+/// 获取 LogRecord header 部分的最大长度
+pub fn max_log_record_header_size() -> usize {
+    mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2
 }
 
 impl LogRecord {
@@ -41,10 +49,30 @@ impl LogRecord {
     pub fn encode(&self) -> Vec<u8> {
         todo!()
     }
+
+    pub fn get_crc(&self) -> u32 {
+        todo!()
+    }
 }
 
 impl LogRecordPos {
     pub fn new(file_id: u32, offset: u64) -> Self {
         Self { file_id, offset }
+    }
+}
+
+impl LogRecordType {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => LogRecordType::Normal,
+            2 => LogRecordType::Delete,
+            _ => panic!("invalid log record type"),
+        }
+    }
+}
+
+impl ReadLogRecord {
+    pub fn new(record: LogRecord, size: usize) -> Self {
+        Self { record, size }
     }
 }
