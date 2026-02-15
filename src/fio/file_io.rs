@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use crate::{errors::AppError, fio::IOManager};
 use log::error;
 use parking_lot::RwLock;
@@ -30,7 +28,7 @@ impl FileIO {
             }),
             Err(e) => {
                 error!("failed to open data file: {}", e);
-                Err(AppError::Open)
+                Err(AppError::FailedToOpenDataFile)
             }
         }
     }
@@ -42,7 +40,7 @@ impl IOManager for FileIO {
             Ok(size) => Ok(size),
             Err(e) => {
                 error!("read from data file err: {}", e);
-                Err(AppError::Read)
+                Err(AppError::FailedToReadFromDataFile)
             }
         }
     }
@@ -53,7 +51,7 @@ impl IOManager for FileIO {
             Ok(size) => Ok(size),
             Err(e) => {
                 error!("write to data file err: {}", e);
-                Err(AppError::Write)
+                Err(AppError::FailedToWriteDataFile)
             }
         }
     }
@@ -63,7 +61,7 @@ impl IOManager for FileIO {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!("write to data file err: {:?}", e);
-                Err(AppError::Sync)
+                Err(AppError::FailedToSyncDataFile)
             }
         }
     }

@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use crate::{data::log_record::LogRecordPos, index::Indexer};
 use parking_lot::RwLock;
 use std::{collections::BTreeMap, sync::Arc};

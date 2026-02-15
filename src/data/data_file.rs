@@ -1,8 +1,10 @@
 #![allow(unused)]
 
-use crate::{data::log_record::LogRecord, errors::AppError, fio::IOManager};
+use crate::{data::log_record::ReadLogRecord, errors::AppError, fio::IOManager};
 use parking_lot::RwLock;
 use std::{path::PathBuf, sync::Arc};
+
+pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
 
 /// 数据文件
 pub struct DataFile {
@@ -23,11 +25,16 @@ impl DataFile {
         *self.write_off.read()
     }
 
+    pub fn set_write_off(&self, offset: u64) {
+        let mut write_guard = self.write_off.write();
+        *write_guard = offset;
+    }
+
     pub fn get_file_id(&self) -> u32 {
         *self.file_id.read()
     }
 
-    pub fn read_log_record(&self, offset: u64) -> Result<LogRecord, AppError> {
+    pub fn read_log_record(&self, offset: u64) -> Result<ReadLogRecord, AppError> {
         todo!()
     }
 

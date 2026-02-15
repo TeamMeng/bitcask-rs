@@ -1,7 +1,3 @@
-#![allow(unused)]
-
-use bytes::Bytes;
-
 /// 写入到数据文件的记录，追加写入的数据类似日志的格式
 pub struct LogRecord {
     pub(crate) key: Vec<u8>,
@@ -25,6 +21,12 @@ pub enum LogRecordType {
     Normal = 1,
     /// 被删除的数据标记，墓碑值
     Delete = 2,
+}
+
+/// 从数据文件中读取的 log_record 信息，包含其 size
+pub struct ReadLogRecord {
+    pub(crate) record: LogRecord,
+    pub(crate) size: u64,
 }
 
 impl LogRecord {

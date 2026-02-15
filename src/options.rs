@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 /// 数据库启动配置项
+#[derive(Debug, Clone)]
 pub struct Options {
     /// 数据库目录
     pub dir_path: PathBuf,
@@ -8,4 +9,15 @@ pub struct Options {
     pub data_file_size: u64,
     /// 是否每次写入时持久化
     pub sync_writes: bool,
+    /// 数据库类型
+    pub index_type: IndexType,
+}
+
+#[derive(Debug, Clone)]
+pub enum IndexType {
+    /// BTree 索引
+    BTree,
+
+    /// 跳表索引
+    SkipList,
 }
