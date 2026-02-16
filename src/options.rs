@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 /// 数据库启动配置项
 #[derive(Debug, Clone)]
@@ -20,4 +20,15 @@ pub enum IndexType {
 
     /// 跳表索引
     SkipList,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            dir_path: env::temp_dir().join("bitcask-rs"),
+            data_file_size: 256 * 1024 * 1024,
+            sync_writes: false,
+            index_type: IndexType::BTree,
+        }
+    }
 }

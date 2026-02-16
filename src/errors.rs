@@ -53,6 +53,9 @@ pub enum AppError {
     #[error("decode error")]
     DecodeError,
 
+    #[error("decode error")]
+    EncodeError,
+
     #[error("get value failed")]
     GetValueFailed,
 

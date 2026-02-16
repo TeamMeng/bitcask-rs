@@ -100,13 +100,13 @@ impl Engine {
     }
 
     /// 根据 key 获取对应的数据
-    pub fn get(&self, key: Bytes) -> Result<Bytes, AppError> {
+    pub fn get(&self, key: &Bytes) -> Result<Bytes, AppError> {
         if key.is_empty() {
             return Err(AppError::KeyIsEmpty);
         }
 
         // 从内存索引中获取key，对应的数据信息
-        let Some(log_record_pos) = self.index.get(&key) else {
+        let Some(log_record_pos) = self.index.get(key) else {
             return Err(AppError::KeyNotFound);
         };
 
@@ -163,7 +163,7 @@ impl Engine {
     fn append_log_record(&self, log_record: &LogRecord) -> Result<LogRecordPos, AppError> {
         let dir_path = self.options.dir_path.clone();
         // 输入数据进行解码
-        let en_record = log_record.encode();
+        let en_record = log_record.encode()?;
         let recode_len = en_record.len() as u64;
 
         // 获取当前活跃文件

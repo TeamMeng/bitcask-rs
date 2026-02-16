@@ -1,4 +1,8 @@
-use prost::length_delimiter_len;
+use crate::errors::AppError;
+use bytes::{BufMut, BytesMut};
+use crc32fast::Hasher;
+use log::warn;
+use prost::{encode_length_delimiter, length_delimiter_len};
 use std::mem;
 
 /// 写入到数据文件的记录，追加写入的数据类似日志的格式
@@ -18,7 +22,7 @@ pub struct LogRecordPos {
 }
 
 /// 数据类型
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogRecordType {
     /// 正常 Put 的数据
     Normal = 1,
@@ -46,12 +50,58 @@ impl LogRecord {
         }
     }
 
-    pub fn encode(&self) -> Vec<u8> {
-        todo!()
+    /// encode log record，返回字节数组及长度
+    // +------------+-------------+------------+-----------+-----------+---------+
+    // |  crc检验值 |   type类型  |  key size  | value size|    key    |  value  |
+    // +------------+-------------+------------+-----------+-----------+---------+
+    //     4 字节        1字节      变长（最大5）变长（最大5）  变长      变长
+    pub fn encode(&self) -> Result<Vec<u8>, AppError> {
+        Ok(self.encode_and_get_crc()?.0)
     }
 
-    pub fn get_crc(&self) -> u32 {
-        todo!()
+    pub fn get_crc(&self) -> Result<u32, AppError> {
+        Ok(self.encode_and_get_crc()?.1)
+    }
+
+    fn encode_and_get_crc(&self) -> Result<(Vec<u8>, u32), AppError> {
+        // 初始化字节数组，存储编码数据
+        let mut buf = BytesMut::new();
+        buf.reserve(self.encoded_length());
+
+        // 第一个字节 type 类型
+        buf.put_u8(self.rec_type as u8);
+
+        // 再存储 key 和 value 的长度
+        if let Err(e) = encode_length_delimiter(self.key.len(), &mut buf) {
+            warn!("encode error: {}", e);
+            return Err(AppError::EncodeError);
+        }
+
+        if let Err(e) = encode_length_delimiter(self.value.len(), &mut buf) {
+            warn!("encode error: {}", e);
+            return Err(AppError::EncodeError);
+        }
+
+        // 存储 key 和 value
+        buf.extend_from_slice(&self.key);
+        buf.extend_from_slice(&self.value);
+
+        // 计算并存储 crc 检验值
+        let mut hashder = Hasher::new();
+        hashder.update(&buf);
+        let crc = hashder.finalize();
+        buf.put_u32(crc);
+
+        Ok((buf.to_vec(), crc))
+    }
+
+    fn encoded_length(&self) -> usize {
+        mem::size_of::<u8>()
+            + length_delimiter_len(self.key.len())
+            + length_delimiter_len(self.value.len())
+            + self.key.len()
+            + self.value.len()
+            + 4
     }
 }
 
@@ -74,5 +124,58 @@ impl LogRecordType {
 impl ReadLogRecord {
     pub fn new(record: LogRecord, size: usize) -> Self {
         Self { record, size }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn log_record_encode_should_work() -> Result<()> {
+        // 正常的一条 LogRecord 编码
+        let mut log_record = LogRecord::new(
+            "name".as_bytes().to_vec(),
+            "bitcask-rs".as_bytes().to_vec(),
+            LogRecordType::Normal,
+        );
+
+        let enc = log_record.encode()?;
+        assert_eq!(
+            vec![
+                1, 4, 10, 110, 97, 109, 101, 98, 105, 116, 99, 97, 115, 107, 45, 114, 115, 60, 209,
+                119, 130
+            ],
+            enc
+        );
+
+        let crc = log_record.get_crc()?;
+        assert_eq!(1020360578, crc);
+
+        // LogRecord 的 value 为空
+        log_record.value = Default::default();
+        let enc = log_record.encode()?;
+        assert_eq!(vec![1, 4, 0, 110, 97, 109, 101, 223, 237, 55, 198], enc);
+
+        let crc = log_record.get_crc()?;
+        assert_eq!(3756865478, crc);
+
+        // 类型为 Deleted 的情况
+        log_record.value = "bitcask-rs".as_bytes().to_vec();
+        log_record.rec_type = LogRecordType::Delete;
+
+        let enc = log_record.encode()?;
+        assert_eq!(
+            vec![
+                2, 4, 10, 110, 97, 109, 101, 98, 105, 116, 99, 97, 115, 107, 45, 114, 115, 111, 75,
+                44, 6
+            ],
+            enc
+        );
+
+        let crc = log_record.get_crc()?;
+        assert_eq!(1867197446, crc);
+        Ok(())
     }
 }

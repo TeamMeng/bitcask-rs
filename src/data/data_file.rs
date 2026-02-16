@@ -97,7 +97,7 @@ impl DataFile {
 
         // 向前移动到最后的 4 个字节 crc
         kv_buf.advance(key_size + value_size);
-        if kv_buf.get_u32() != log_record.get_crc() {
+        if kv_buf.get_u32() != log_record.get_crc()? {
             return Err(AppError::InvalidLogRecordCrc);
         }
 
@@ -164,6 +164,40 @@ mod tests {
 
         // sync
         data_file.sync()?;
+
+        // read log record
+        let enc = LogRecord::new(
+            "name".as_bytes().to_vec(),
+            "bitcask-rs".as_bytes().to_vec(),
+            LogRecordType::Normal,
+        )
+        .encode()?;
+
+        let size = data_file.write(&enc)?;
+        assert_eq!(21, size);
+
+        // 3 + 2
+        let read_log_record = data_file.read_log_record(5)?;
+        assert!(read_log_record.size == 21);
+        assert_eq!(read_log_record.record.key, "name".as_bytes());
+        assert_eq!(read_log_record.record.value, "bitcask-rs".as_bytes());
+        assert_eq!(read_log_record.record.rec_type, LogRecordType::Normal);
+
+        let enc = LogRecord::new(
+            "a".as_bytes().to_vec(),
+            "b".as_bytes().to_vec(),
+            LogRecordType::Delete,
+        )
+        .encode()?;
+
+        let size = data_file.write(&enc)?;
+        assert_eq!(9, size);
+
+        // 3 + 2 + 21
+        let read_log_record = data_file.read_log_record(26)?;
+        assert_eq!(read_log_record.record.key, "a".as_bytes());
+        assert_eq!(read_log_record.record.value, "b".as_bytes());
+        assert_eq!(read_log_record.record.rec_type, LogRecordType::Delete);
 
         // 删除生成文件
         fs::remove_file(get_data_file_name(&dir_path, 0))?;
