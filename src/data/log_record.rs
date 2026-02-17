@@ -28,12 +28,21 @@ pub enum LogRecordType {
     Normal = 1,
     /// 被删除的数据标记，墓碑值
     Delete = 2,
+
+    // 事务完成的标识
+    TxnFinished = 3,
 }
 
 /// 从数据文件中读取的 log_record 信息，包含其 size
 pub struct ReadLogRecord {
     pub(crate) record: LogRecord,
     pub(crate) size: usize,
+}
+
+/// 暂存事务数据信息
+pub struct TransactionRecord {
+    pub(crate) record: LogRecord,
+    pub(crate) pos: LogRecordPos,
 }
 
 /// 获取 LogRecord header 部分的最大长度
@@ -116,6 +125,7 @@ impl LogRecordType {
         match v {
             1 => LogRecordType::Normal,
             2 => LogRecordType::Delete,
+            3 => LogRecordType::TxnFinished,
             _ => panic!("invalid log record type"),
         }
     }

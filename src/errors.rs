@@ -64,4 +64,7 @@ pub enum AppError {
 
     #[error("iterator next error")]
     IteratorNextError,
+
+    #[error("exceed the max batch num")]
+    ExceedMaxBatchNum,
 }

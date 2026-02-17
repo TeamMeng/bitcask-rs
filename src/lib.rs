@@ -1,3 +1,4 @@
+mod batch;
 mod data;
 mod errors;
 mod fio;
