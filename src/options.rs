@@ -13,6 +13,15 @@ pub struct Options {
     pub index_type: IndexType,
 }
 
+/// 索引迭代器配置项
+#[derive(Default)]
+pub struct IteratorOptions {
+    // 前缀
+    pub prefix: Vec<u8>,
+    // 是否反向
+    pub reverse: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum IndexType {
     /// BTree 索引

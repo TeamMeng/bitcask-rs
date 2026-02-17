@@ -61,4 +61,7 @@ pub enum AppError {
 
     #[error("invalid crc value, log record maybe corrupted")]
     InvalidLogRecordCrc,
+
+    #[error("iterator next error")]
+    IteratorNextError,
 }

@@ -23,7 +23,7 @@ pub struct Engine {
     /// 旧数据文件
     older_files: Arc<RwLock<HashMap<u32, DataFile>>>,
     /// 数据内存索引
-    index: Box<dyn index::Indexer>,
+    pub(crate) index: Box<dyn index::Indexer>,
     /// 数据库启动时的文件 id，只用于加载索引使用，不能在其他的地方更新或使用
     file_ids: Vec<u32>,
 }
@@ -110,6 +110,14 @@ impl Engine {
             return Err(AppError::KeyNotFound);
         };
 
+        self.get_value_by_position(&log_record_pos)
+    }
+
+    // 根据索引信息获取 value
+    pub(crate) fn get_value_by_position(
+        &self,
+        log_record_pos: &LogRecordPos,
+    ) -> Result<Bytes, AppError> {
         let active_file = self.active_file.read();
         let older_file = self.older_files.read();
 
