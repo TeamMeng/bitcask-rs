@@ -2,6 +2,7 @@ use crate::errors::AppError;
 use bytes::{BufMut, BytesMut};
 use crc32fast::Hasher;
 use log::warn;
+use prost::encoding::{decode_varint, encode_varint};
 use prost::{encode_length_delimiter, length_delimiter_len};
 use std::mem;
 
@@ -48,6 +49,23 @@ pub struct TransactionRecord {
 /// 获取 LogRecord header 部分的最大长度
 pub fn max_log_record_header_size() -> usize {
     mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2
+}
+
+/// 解码 LogRecordPos
+pub fn decode_log_record_pos(pos: Vec<u8>) -> LogRecordPos {
+    let mut buf = BytesMut::new();
+    buf.put_slice(&pos);
+
+    let file_id = match decode_varint(&mut buf) {
+        Ok(fid) => fid,
+        Err(e) => panic!("decode log record pos err: {}", e),
+    };
+    let offset = match decode_varint(&mut buf) {
+        Ok(offset) => offset,
+        Err(e) => panic!("decode log record pos err: {}", e),
+    };
+
+    LogRecordPos::new(file_id as _, offset)
 }
 
 impl LogRecord {
@@ -117,6 +135,13 @@ impl LogRecord {
 impl LogRecordPos {
     pub fn new(file_id: u32, offset: u64) -> Self {
         Self { file_id, offset }
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = BytesMut::new();
+        encode_varint(self.file_id as u64, &mut buf);
+        encode_varint(self.offset, &mut buf);
+        buf.to_vec()
     }
 }
 

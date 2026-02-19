@@ -1,5 +1,7 @@
 use crate::{
-    data::log_record::{LogRecord, LogRecordType, ReadLogRecord, max_log_record_header_size},
+    data::log_record::{
+        LogRecord, LogRecordPos, LogRecordType, ReadLogRecord, max_log_record_header_size,
+    },
     errors::AppError,
     fio::{IOManager, new_io_manager},
 };
@@ -12,6 +14,8 @@ use std::{
 };
 
 pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
+pub const HINT_FILE_NAME: &str = "hint-index";
+pub const MERGE_FINISHED_FILE_NAME: &str = "merge-finished";
 
 /// 数据文件
 pub struct DataFile {
@@ -32,6 +36,30 @@ impl DataFile {
         let io_manager = new_io_manager(file_name)?;
         Ok(Self {
             file_id: Arc::new(RwLock::new(file_id)),
+            write_off: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    /// 新建或打开 hint 索引文件
+    pub fn new_hint_file(dir_path: PathBuf) -> Result<DataFile, AppError> {
+        let file_name = dir_path.join(HINT_FILE_NAME);
+        // 初始化 io manager
+        let io_manager = new_io_manager(file_name)?;
+        Ok(Self {
+            file_id: Arc::new(RwLock::new(0)),
+            write_off: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    /// 新建或打开 merge 完成的文件
+    pub fn new_merge_fin_file(dir_path: PathBuf) -> Result<DataFile, AppError> {
+        let file_name = dir_path.join(MERGE_FINISHED_FILE_NAME);
+        // 初始化 io manager
+        let io_manager = new_io_manager(file_name)?;
+        Ok(Self {
+            file_id: Arc::new(RwLock::new(0)),
             write_off: Arc::new(RwLock::new(0)),
             io_manager: Box::new(io_manager),
         })
@@ -120,13 +148,22 @@ impl DataFile {
         Ok(n_bytes)
     }
 
+    /// 写 hint 索引到文件当中
+    pub fn write_hint_record(&self, key: Vec<u8>, pos: LogRecordPos) -> Result<(), AppError> {
+        let hint_record = LogRecord::new(key, pos.encode(), LogRecordType::Normal);
+        let enc_record = hint_record.encode()?;
+        self.write(&enc_record)?;
+
+        Ok(())
+    }
+
     pub fn sync(&self) -> Result<(), AppError> {
         self.io_manager.sync()
     }
 }
 
 /// 获取文件名称
-fn get_data_file_name(dir_path: &Path, file_id: u32) -> PathBuf {
+pub fn get_data_file_name(dir_path: &Path, file_id: u32) -> PathBuf {
     dir_path.join(format!("{:09}", file_id) + DATA_FILE_NAME_SUFFIX)
 }
 

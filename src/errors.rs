@@ -38,6 +38,18 @@ pub enum AppError {
     #[error("failed to read the database directory")]
     FailedToReadDatabaseDir,
 
+    #[error("failed to delete the database directory")]
+    FailedToDeleteDatabaseDir,
+
+    #[error("failed to delete file")]
+    FailedToDeleteFile,
+
+    #[error("failed to rename")]
+    FailedToRename,
+
+    #[error("failed to get merge file")]
+    FailedToGetMergeFile,
+
     #[error("the database directory maybe corrupted")]
     DataDirectoryCorrupted,
 
@@ -67,4 +79,10 @@ pub enum AppError {
 
     #[error("exceed the max batch num")]
     ExceedMaxBatchNum,
+
+    #[error("merge is in progress, try again later")]
+    MergeInProgress,
+
+    #[error("parse error")]
+    ParseError,
 }
