@@ -22,13 +22,16 @@ pub struct IteratorOptions {
     pub reverse: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexType {
     /// BTree 索引
     BTree,
 
     /// 跳表索引
     SkipList,
+
+    // B+树索引
+    BPlusTree,
 }
 
 /// 批量写数据配置项

@@ -86,6 +86,7 @@ mod tests {
         }
 
         // 重启
+        std::mem::drop(engine);
         let engine = Engine::open(opts.clone())?;
 
         let ret = engine.get(&get_test_key(11))?;

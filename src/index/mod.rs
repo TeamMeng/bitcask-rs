@@ -1,8 +1,12 @@
+pub mod bptree;
 pub mod btree;
+pub mod skiplist;
+
+use std::path::PathBuf;
 
 use crate::{
     data::log_record::LogRecordPos,
-    index::btree::BTree,
+    index::{bptree::BPlusTree, btree::BTree, skiplist::SkipList},
     options::{IndexType, IteratorOptions},
 };
 use bytes::Bytes;
@@ -38,9 +42,10 @@ pub trait IndexIterator: Sync + Send {
 }
 
 /// 根据类型打开内存索引
-pub fn new_indexer(index_type: IndexType) -> impl Indexer {
+pub fn new_indexer(index_type: IndexType, dir_path: PathBuf) -> Box<dyn Indexer> {
     match index_type {
-        IndexType::BTree => BTree::new(),
-        IndexType::SkipList => todo!(),
+        IndexType::BTree => Box::new(BTree::new()),
+        IndexType::SkipList => Box::new(SkipList::new()),
+        IndexType::BPlusTree => Box::new(BPlusTree::new(dir_path)),
     }
 }

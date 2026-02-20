@@ -2,7 +2,7 @@ use crate::{
     data::log_record::{LogRecord, LogRecordType},
     db::Engine,
     errors::AppError,
-    options::WriteBatchOptions,
+    options::{IndexType::BPlusTree, WriteBatchOptions},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::Mutex;
@@ -25,6 +25,10 @@ pub struct WriteBatch<'a> {
 
 impl Engine {
     pub fn new_write_batch(&self, options: WriteBatchOptions) -> Result<WriteBatch<'_>, AppError> {
+        if self.options.index_type == BPlusTree && !self.seq_file_exists && !self.is_initial {
+            return Err(AppError::UnableToUserWriteBatch);
+        }
+
         Ok(WriteBatch {
             pending_write: Arc::new(Mutex::new(HashMap::new())),
             engine: self,
@@ -193,6 +197,8 @@ mod tests {
 
         // 重启之后进行检验
         engine.close()?;
+
+        let engine = Engine::open(opts.clone())?;
 
         let keys = engine.list_keys();
         assert_eq!(

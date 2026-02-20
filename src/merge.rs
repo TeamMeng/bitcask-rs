@@ -1,7 +1,10 @@
 use crate::{
     batch::{NON_TRANSACTION_SEQ_NO, log_record_key_with_seq, parse_log_record_key},
     data::{
-        data_file::{DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME, get_data_file_name},
+        data_file::{
+            DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME, SEQ_NO_FILE_NAME,
+            get_data_file_name,
+        },
         log_record::{LogRecord, LogRecordType, decode_log_record_pos},
     },
     db::Engine,
@@ -191,6 +194,9 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<(), AppError> {
             && file_name.ends_with(MERGE_FINISHED_FILE_NAME)
         {
             merge_finished = true;
+            if file_name.ends_with(SEQ_NO_FILE_NAME) {
+                continue;
+            }
         }
         merge_file_names.push(entry.file_name());
     }

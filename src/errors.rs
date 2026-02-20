@@ -85,4 +85,7 @@ pub enum AppError {
 
     #[error("parse error")]
     ParseError,
+
+    #[error("can not use write batch, seq file not exists")]
+    UnableToUserWriteBatch,
 }

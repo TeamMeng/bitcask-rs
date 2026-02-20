@@ -65,6 +65,14 @@ impl IOManager for FileIO {
             }
         }
     }
+
+    fn size(&self) -> u64 {
+        self.fd
+            .read()
+            .metadata()
+            .expect("failed read metadata")
+            .len()
+    }
 }
 
 #[cfg(test)]

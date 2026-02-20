@@ -1,16 +1,16 @@
 use crate::{
     batch::{NON_TRANSACTION_SEQ_NO, log_record_key_with_seq, parse_log_record_key},
     data::{
-        data_file::{DATA_FILE_NAME_SUFFIX, DataFile, MERGE_FINISHED_FILE_NAME},
+        data_file::{DATA_FILE_NAME_SUFFIX, DataFile, MERGE_FINISHED_FILE_NAME, SEQ_NO_FILE_NAME},
         log_record::{LogRecord, LogRecordPos, LogRecordType, TransactionRecord},
     },
     errors::AppError,
     index::{self, new_indexer},
     merge::load_merge_files,
-    options::Options,
+    options::{IndexType, Options},
 };
 use bytes::Bytes;
-use log::warn;
+use log::{error, warn};
 use parking_lot::{Mutex, RwLock};
 use std::{
     collections::HashMap,
@@ -23,6 +23,7 @@ use std::{
 };
 
 const INITIAL_FILE_ID: u32 = 0;
+const SEQ_NO_KEY: &str = "seq.no";
 
 /// 存储引擎实例结构体
 pub struct Engine {
@@ -36,9 +37,16 @@ pub struct Engine {
     pub(crate) index: Box<dyn index::Indexer>,
     /// 数据库启动时的文件 id，只用于加载索引使用，不能在其他的地方更新或使用
     file_ids: Vec<u32>,
+    /// 事务提交保证串行化
     pub(crate) batch_commit_lock: Mutex<()>,
+    /// 事务序列号，全局递增
     pub(crate) seq_no: Arc<AtomicUsize>,
+    /// 防止多个线程同时 merge
     pub(crate) merging_lock: Mutex<()>,
+    /// 事务序列号文件是否存在
+    pub(crate) seq_file_exists: bool,
+    /// 是否第一次初始化该目录
+    pub(crate) is_initial: bool,
 }
 
 impl Engine {
@@ -47,12 +55,20 @@ impl Engine {
         // 检验用户传递过来的配置项
         check_options(&opts)?;
 
+        let mut is_initial = false;
         // 判断数据目录是否存在，如果不存在则创建这个目录
         if !opts.dir_path.is_dir()
             && let Err(e) = fs::create_dir_all(&opts.dir_path)
         {
             warn!("failed to create the database dir: {}", e);
             return Err(AppError::FailedToCreateDatabaseDir);
+        }
+
+        let Ok(entries) = fs::read_dir(opts.dir_path.clone()) else {
+            return Err(AppError::FailedToReadDatabaseDir);
+        };
+        if entries.count() == 0 {
+            is_initial = true;
         }
 
         // 加载 merge 目录
@@ -82,28 +98,46 @@ impl Engine {
         };
 
         let index_type = opts.index_type.clone();
+        let index = new_indexer(index_type, opts.dir_path.clone());
 
         // 构造存储引擎实例
-        let engine = Self {
+        let mut engine = Self {
             options: Arc::new(opts),
             active_file: Arc::new(RwLock::new(active_file)),
             older_files: Arc::new(RwLock::new(older_files)),
-            index: Box::new(new_indexer(index_type)),
+            index,
             file_ids,
             batch_commit_lock: Mutex::new(()),
             seq_no: Arc::new(AtomicUsize::new(1)),
             merging_lock: Mutex::new(()),
+            seq_file_exists: false,
+            is_initial,
         };
 
-        // 从 hint 文件中加载索引
-        engine.load_index_from_hint_file()?;
+        // B+树则不需要从数据文件中加载索引
+        if engine.options.index_type != IndexType::BPlusTree {
+            // 从 hint 文件中加载索引
+            engine.load_index_from_hint_file()?;
 
-        // 从数据文件中加载内存索引
-        let current_seq_no = engine.load_index_from_data_files()?;
+            // 从数据文件中加载内存索引
+            let current_seq_no = engine.load_index_from_data_files()?;
 
-        // 更新当前事务序列号
-        if current_seq_no > 0 {
-            engine.seq_no.store(current_seq_no + 1, Ordering::SeqCst);
+            // 更新当前事务序列号
+            if current_seq_no > 0 {
+                engine.seq_no.store(current_seq_no + 1, Ordering::SeqCst);
+            }
+        }
+
+        if engine.options.index_type == IndexType::BPlusTree {
+            let (exists, seq_no) = engine.load_seq_no();
+            if exists {
+                engine.seq_no.store(seq_no, Ordering::SeqCst);
+                engine.seq_file_exists = exists;
+            }
+
+            // 设置当前活跃文件的偏移
+            let active_file = engine.active_file.write();
+            active_file.set_write_off(active_file.file_size());
         }
 
         Ok(engine)
@@ -205,6 +239,17 @@ impl Engine {
 
     /// 关闭存储引擎，将数据持久化到磁盘。文件句柄等资源在 Engine 被 drop 时自动释放
     pub fn close(&self) -> Result<(), AppError> {
+        // 记录当前的事务序列号
+        let seq_no_file = DataFile::new_seq_no_file(self.options.dir_path.clone())?;
+        let seq_no = self.seq_no.load(Ordering::SeqCst);
+        let record = LogRecord::new(
+            SEQ_NO_KEY.as_bytes().to_vec(),
+            seq_no.to_string().into_bytes(),
+            LogRecordType::Normal,
+        );
+        seq_no_file.write(&record.encode()?)?;
+        seq_no_file.sync()?;
+
         self.active_file.read().sync()
     }
 
@@ -365,6 +410,29 @@ impl Engine {
             self.index.put(key, pos);
         };
     }
+
+    // B+树索引模式下加载事务序列号
+    fn load_seq_no(&self) -> (bool, usize) {
+        let file_name = self.options.dir_path.join(SEQ_NO_FILE_NAME);
+        if !file_name.is_file() {
+            return (false, 0);
+        }
+
+        let seq_no_file = DataFile::new_seq_no_file(self.options.dir_path.clone())
+            .expect("failed to new seq no file");
+        let record = match seq_no_file.read_log_record(0) {
+            Ok(res) => res.record,
+            Err(e) => panic!("failed to read seq no: {}", e),
+        };
+        let seq_no = String::from_utf8(record.value)
+            .expect("failed to from utf8")
+            .parse::<usize>()
+            .expect("failed to parse");
+
+        fs::remove_file(file_name).expect("failed to remove file");
+
+        (true, seq_no)
+    }
 }
 
 fn check_options(opts: &Options) -> Result<(), AppError> {
@@ -417,4 +485,12 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>, AppError> {
     }
 
     Ok(data_files)
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            error!("error with close engine: {}", e);
+        }
+    }
 }
