@@ -64,12 +64,19 @@ mod tests {
     use super::*;
     use crate::{options::Options, util::rand_kv::get_test_value};
     use anyhow::Result;
-    use std::{fs, path::PathBuf};
+    use tempfile::TempDir;
+
+    fn test_tmpdir() -> anyhow::Result<TempDir> {
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&parent)?;
+        TempDir::new_in(parent).map_err(Into::into)
+    }
 
     #[test]
     fn iterator_should_work() -> Result<()> {
+        let tmp = test_tmpdir()?;
         let opts = Options {
-            dir_path: PathBuf::from("/tmp/bitcask-rs-iter"),
+            dir_path: tmp.path().to_path_buf(),
             ..Default::default()
         };
         let engine = Engine::open(opts.clone())?;
@@ -154,7 +161,6 @@ mod tests {
 
         assert!(ret);
 
-        fs::remove_dir_all(opts.dir_path)?;
         Ok(())
     }
 }

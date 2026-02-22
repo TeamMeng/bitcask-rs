@@ -4,6 +4,7 @@ use crate::{
     },
     errors::AppError,
     fio::{IOManager, new_io_manager},
+    options::IOType,
 };
 use bytes::{Buf, BytesMut};
 use parking_lot::RwLock;
@@ -29,52 +30,61 @@ pub struct DataFile {
 }
 
 impl DataFile {
-    /// 创建或打开一个新的数据文件
-    pub fn new(dir_path: PathBuf, file_id: u32) -> Result<Self, AppError> {
-        // 根据 path 和 id 构造出完整的文件名称
+    /// 创建或打开一个数据文件。create=true 表示新建/截断，false 表示打开已存在文件（用于加载）
+    pub fn new(dir_path: PathBuf, file_id: u32, io_type: IOType) -> Result<Self, AppError> {
+        DataFile::new_with_create(dir_path, file_id, io_type, true)
+    }
+
+    /// 打开已存在的数据文件（加载时使用，mmap 不会截断）
+    pub fn open(dir_path: PathBuf, file_id: u32, io_type: IOType) -> Result<Self, AppError> {
+        DataFile::new_with_create(dir_path, file_id, io_type, false)
+    }
+
+    fn new_with_create(
+        dir_path: PathBuf,
+        file_id: u32,
+        io_type: IOType,
+        create: bool,
+    ) -> Result<Self, AppError> {
         let file_name = get_data_file_name(&dir_path, file_id);
-        // 初始化 io manager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, io_type, create);
         Ok(Self {
             file_id: Arc::new(RwLock::new(file_id)),
             write_off: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
     /// 新建或打开 hint 索引文件
     pub fn new_hint_file(dir_path: PathBuf) -> Result<DataFile, AppError> {
         let file_name = dir_path.join(HINT_FILE_NAME);
-        // 初始化 io manager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, IOType::StandardFIO, true);
         Ok(Self {
             file_id: Arc::new(RwLock::new(0)),
             write_off: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
     /// 新建或打开 merge 完成的文件
     pub fn new_merge_fin_file(dir_path: PathBuf) -> Result<DataFile, AppError> {
         let file_name = dir_path.join(MERGE_FINISHED_FILE_NAME);
-        // 初始化 io manager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, IOType::StandardFIO, true);
         Ok(Self {
             file_id: Arc::new(RwLock::new(0)),
             write_off: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
     /// 新建或打开存储事务序列号的文件
     pub fn new_seq_no_file(dir_path: PathBuf) -> Result<DataFile, AppError> {
         let file_name = dir_path.join(SEQ_NO_FILE_NAME);
-        // 初始化 io manager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, IOType::StandardFIO, true);
         Ok(Self {
             file_id: Arc::new(RwLock::new(0)),
             write_off: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
@@ -177,6 +187,14 @@ impl DataFile {
     pub fn sync(&self) -> Result<(), AppError> {
         self.io_manager.sync()
     }
+
+    pub fn set_io_manager(&mut self, dir_path: PathBuf, io_type: IOType) {
+        self.io_manager = new_io_manager(
+            get_data_file_name(&dir_path, self.get_file_id()),
+            io_type,
+            true,
+        )
+    }
 }
 
 /// 获取文件名称
@@ -193,15 +211,15 @@ mod tests {
     #[test]
     fn data_file_should_work() -> Result<()> {
         let dir_path = env::temp_dir();
-        let data_file = DataFile::new(dir_path.clone(), 0)?;
+        let data_file = DataFile::new(dir_path.clone(), 0, IOType::StandardFIO)?;
         assert_eq!(data_file.get_file_id(), 0);
 
         // 重复打开
-        let data_file = DataFile::new(dir_path.clone(), 0)?;
+        let data_file = DataFile::new(dir_path.clone(), 0, IOType::StandardFIO)?;
         assert_eq!(data_file.get_file_id(), 0);
 
         // 打开其他 id 的文件
-        let data_file = DataFile::new(dir_path.clone(), 660)?;
+        let data_file = DataFile::new(dir_path.clone(), 660, IOType::StandardFIO)?;
         assert_eq!(data_file.get_file_id(), 660);
 
         // valid write

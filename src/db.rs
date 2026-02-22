@@ -7,14 +7,15 @@ use crate::{
     errors::AppError,
     index::{self, new_indexer},
     merge::load_merge_files,
-    options::{IndexType, Options},
+    options::{IOType, IndexType, Options},
 };
 use bytes::Bytes;
+use fs2::FileExt;
 use log::{error, warn};
 use parking_lot::{Mutex, RwLock};
 use std::{
     collections::HashMap,
-    fs,
+    fs::{self, File},
     path::PathBuf,
     sync::{
         Arc,
@@ -24,6 +25,7 @@ use std::{
 
 const INITIAL_FILE_ID: u32 = 0;
 const SEQ_NO_KEY: &str = "seq.no";
+pub const FILE_LOCK_NAME: &str = "flock";
 
 /// 存储引擎实例结构体
 pub struct Engine {
@@ -47,6 +49,10 @@ pub struct Engine {
     pub(crate) seq_file_exists: bool,
     /// 是否第一次初始化该目录
     pub(crate) is_initial: bool,
+    /// 文件锁，保证只能在数据目录上打开一个实例
+    lock_file: File,
+    /// 累计写入了多少字节
+    bytes_write: Arc<AtomicUsize>,
 }
 
 impl Engine {
@@ -57,11 +63,32 @@ impl Engine {
 
         let mut is_initial = false;
         // 判断数据目录是否存在，如果不存在则创建这个目录
-        if !opts.dir_path.is_dir()
-            && let Err(e) = fs::create_dir_all(&opts.dir_path)
+        if !opts.dir_path.is_dir() {
+            is_initial = true;
+            if let Err(e) = fs::create_dir_all(&opts.dir_path) {
+                warn!("failed to create the database dir: {}", e);
+                return Err(AppError::FailedToCreateDatabaseDir);
+            }
+        }
+
+        // 判断数据目录是否已经被使用了
+        let lock_path = opts.dir_path.join(FILE_LOCK_NAME);
+        let lock_file = match fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&lock_path)
         {
-            warn!("failed to create the database dir: {}", e);
-            return Err(AppError::FailedToCreateDatabaseDir);
+            Ok(f) => f,
+            Err(e) => {
+                warn!("failed to open lock file {}: {}", lock_path.display(), e);
+                return Err(AppError::FailedToCreateDatabaseDir);
+            }
+        };
+        if let Err(e) = lock_file.try_lock_exclusive() {
+            error!("database is used: {}", e);
+            return Err(AppError::DatabaseIsUsing);
         }
 
         let Ok(entries) = fs::read_dir(opts.dir_path.clone()) else {
@@ -75,7 +102,7 @@ impl Engine {
         load_merge_files(opts.dir_path.clone())?;
 
         // 加载数据文件
-        let mut data_file = load_data_files(opts.dir_path.clone())?;
+        let mut data_file = load_data_files(opts.dir_path.clone(), opts.mmap_at_startup)?;
 
         // 设置 file_id 信息
         let mut file_ids = Vec::new();
@@ -94,7 +121,7 @@ impl Engine {
         // 拿到当前活跃文件
         let active_file = match data_file.pop() {
             Some(v) => v,
-            None => DataFile::new(opts.dir_path.clone(), INITIAL_FILE_ID)?,
+            None => DataFile::new(opts.dir_path.clone(), INITIAL_FILE_ID, IOType::StandardFIO)?,
         };
 
         let index_type = opts.index_type.clone();
@@ -112,6 +139,8 @@ impl Engine {
             merging_lock: Mutex::new(()),
             seq_file_exists: false,
             is_initial,
+            lock_file,
+            bytes_write: Arc::new(AtomicUsize::new(0)),
         };
 
         // B+树则不需要从数据文件中加载索引
@@ -125,6 +154,11 @@ impl Engine {
             // 更新当前事务序列号
             if current_seq_no > 0 {
                 engine.seq_no.store(current_seq_no + 1, Ordering::SeqCst);
+            }
+
+            // 重置 IO 类型
+            if engine.options.mmap_at_startup {
+                engine.reset_io_type();
             }
         }
 
@@ -239,6 +273,10 @@ impl Engine {
 
     /// 关闭存储引擎，将数据持久化到磁盘。文件句柄等资源在 Engine 被 drop 时自动释放
     pub fn close(&self) -> Result<(), AppError> {
+        if !self.options.dir_path.is_dir() {
+            return Ok(());
+        }
+
         // 记录当前的事务序列号
         let seq_no_file = DataFile::new_seq_no_file(self.options.dir_path.clone())?;
         let seq_no = self.seq_no.load(Ordering::SeqCst);
@@ -250,7 +288,13 @@ impl Engine {
         seq_no_file.write(&record.encode()?)?;
         seq_no_file.sync()?;
 
-        self.active_file.read().sync()
+        self.active_file.read().sync()?;
+
+        // 释放文件锁
+        if self.lock_file.unlock().is_err() {
+            return Err(AppError::FailedToUnlockFile);
+        };
+        Ok(())
     }
 
     /// 追加写到活跃数据文件中
@@ -272,11 +316,12 @@ impl Engine {
             let current_file_id = active_file.get_file_id();
             // 添加到旧数据文件中
             let mut older_files = self.older_files.write();
-            let old_file = DataFile::new(dir_path.clone(), current_file_id)?;
+            let old_file = DataFile::new(dir_path.clone(), current_file_id, IOType::StandardFIO)?;
             older_files.insert(current_file_id, old_file);
 
             // 打开新的数据文件
-            let new_active_file = DataFile::new(dir_path.clone(), current_file_id + 1)?;
+            let new_active_file =
+                DataFile::new(dir_path.clone(), current_file_id + 1, IOType::StandardFIO)?;
             *active_file = new_active_file;
         }
 
@@ -284,9 +329,23 @@ impl Engine {
         let write_off = active_file.get_write_off();
         active_file.write(&en_record)?;
 
+        let previous = self
+            .bytes_write
+            .fetch_add(en_record.len(), Ordering::SeqCst);
+
+        let mut need_sync = self.options.sync_writes;
+        if !need_sync
+            && self.options.bytes_per_sync > 0
+            && previous + en_record.len() >= self.options.bytes_per_sync
+        {
+            need_sync = true;
+        }
+
         // 根据配置项决定是否持久化
-        if self.options.sync_writes {
+        if need_sync {
             active_file.sync()?;
+            // 清空累计值
+            self.bytes_write.store(0, Ordering::SeqCst);
         }
 
         // 构造数据索引信息
@@ -433,6 +492,15 @@ impl Engine {
 
         (true, seq_no)
     }
+
+    fn reset_io_type(&self) {
+        let mut active_file = self.active_file.write();
+        active_file.set_io_manager(self.options.dir_path.clone(), IOType::StandardFIO);
+        let mut older_files = self.older_files.write();
+        for (_, file) in older_files.iter_mut() {
+            file.set_io_manager(self.options.dir_path.clone(), IOType::StandardFIO);
+        }
+    }
 }
 
 fn check_options(opts: &Options) -> Result<(), AppError> {
@@ -448,7 +516,7 @@ fn check_options(opts: &Options) -> Result<(), AppError> {
 }
 
 // 从数据目录中加载数据文件
-fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>, AppError> {
+fn load_data_files(dir_path: PathBuf, use_mmap: bool) -> Result<Vec<DataFile>, AppError> {
     let Ok(dir) = fs::read_dir(&dir_path) else {
         return Err(AppError::FailedToReadDatabaseDir);
     };
@@ -481,7 +549,11 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>, AppError> {
     file_ids.sort();
     // 遍历所有文件 id，依次打开对应的数据文件
     for file_id in file_ids {
-        data_files.push(DataFile::new(dir_path.clone(), file_id)?);
+        let mut io_type = IOType::StandardFIO;
+        if use_mmap {
+            io_type = IOType::MemoryMap;
+        }
+        data_files.push(DataFile::open(dir_path.clone(), file_id, io_type)?);
     }
 
     Ok(data_files)

@@ -158,13 +158,19 @@ mod tests {
     use crate::options::Options;
     use crate::util::rand_kv::{get_test_key, get_test_value};
     use anyhow::Result;
-    use std::fs;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn test_tmpdir() -> anyhow::Result<TempDir> {
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&parent)?;
+        TempDir::new_in(parent).map_err(Into::into)
+    }
 
     #[test]
     fn write_batch_should_work() -> Result<()> {
+        let tmp = test_tmpdir()?;
         let opts = Options {
-            dir_path: PathBuf::from("/tmp/bitcask-rs-write-batch-test"),
+            dir_path: tmp.path().to_path_buf(),
             data_file_size: 64 * 1024 * 1024,
             ..Default::default()
         };
@@ -211,7 +217,6 @@ mod tests {
         let seq_no = wb.engine.seq_no.load(Ordering::SeqCst);
         assert_eq!(seq_no, 3);
 
-        fs::remove_dir_all(opts.dir_path)?;
         Ok(())
     }
 }

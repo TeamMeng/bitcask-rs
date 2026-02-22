@@ -8,12 +8,19 @@ mod tests {
     };
     use anyhow::Result;
     use bytes::Bytes;
-    use std::{fs, path::PathBuf};
+    use tempfile::TempDir;
+
+    fn test_tmpdir() -> Result<TempDir> {
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&parent)?;
+        TempDir::new_in(parent).map_err(Into::into)
+    }
 
     #[test]
     fn engine_should_work() -> Result<()> {
+        let tmp = test_tmpdir()?;
         let opts = Options {
-            dir_path: PathBuf::from("/tmp/bitcask-rs-test"),
+            dir_path: tmp.path().to_path_buf(),
             data_file_size: 64 * 1024 * 1024,
             ..Default::default()
         };
@@ -98,7 +105,25 @@ mod tests {
         let res = engine.get(&get_test_key(660))?;
         assert_eq!(res, get_test_value(660));
 
-        fs::remove_dir_all(opts.dir_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn engine_filelock_should_work() -> Result<()> {
+        let tmp = test_tmpdir()?;
+        let opts = Options {
+            dir_path: tmp.path().to_path_buf(),
+            data_file_size: 64 * 1024 * 1024,
+            ..Default::default()
+        };
+        let engine = Engine::open(opts.clone())?;
+
+        let ret = Engine::open(opts.clone()).is_err_and(|e| e == AppError::DatabaseIsUsing);
+        assert!(ret);
+
+        engine.close()?;
+        let _engine = Engine::open(opts.clone())?;
+
         Ok(())
     }
 }

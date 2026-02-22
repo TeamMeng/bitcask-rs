@@ -88,4 +88,10 @@ pub enum AppError {
 
     #[error("can not use write batch, seq file not exists")]
     UnableToUserWriteBatch,
+
+    #[error("the database directory is used by another process")]
+    DatabaseIsUsing,
+
+    #[error("failed to unlock file")]
+    FailedToUnlockFile,
 }

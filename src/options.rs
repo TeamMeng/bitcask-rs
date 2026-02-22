@@ -7,10 +7,14 @@ pub struct Options {
     pub dir_path: PathBuf,
     /// 数据文件大小
     pub data_file_size: u64,
+    /// 累计写到多少字节后持久化
+    pub bytes_per_sync: usize,
     /// 是否每次写入时持久化
     pub sync_writes: bool,
     /// 数据库类型
     pub index_type: IndexType,
+    /// 是否用 mmap 打开数据库
+    pub mmap_at_startup: bool,
 }
 
 /// 索引迭代器配置项
@@ -32,6 +36,14 @@ pub enum IndexType {
 
     // B+树索引
     BPlusTree,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum IOType {
+    // 标准文件 IO
+    StandardFIO,
+    // 内存文件映射
+    MemoryMap,
 }
 
 /// 批量写数据配置项
@@ -56,8 +68,10 @@ impl Default for Options {
         Self {
             dir_path: env::temp_dir().join("bitcask-rs"),
             data_file_size: 256 * 1024 * 1024,
+            bytes_per_sync: 0,
             sync_writes: false,
             index_type: IndexType::BTree,
+            mmap_at_startup: true,
         }
     }
 }
