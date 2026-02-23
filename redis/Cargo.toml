@@ -1,0 +1,11 @@
+[package]
+name = "redis"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+bitcask-rs = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
