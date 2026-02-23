@@ -50,7 +50,10 @@ async fn put_handler(
     data: web::Json<HashMap<String, String>>,
 ) -> impl Responder {
     for (key, value) in data.iter() {
-        if let Err(_) = engine.put(Bytes::from(key.to_string()), Bytes::from(value.to_string())) {
+        if engine
+            .put(Bytes::from(key.to_string()), Bytes::from(value.to_string()))
+            .is_err()
+        {
             return HttpResponse::InternalServerError().body("failed to put value in engine");
         }
     }
@@ -75,10 +78,10 @@ async fn get_handler(engine: web::Data<Arc<Engine>>, key: web::Path<String>) -> 
 
 #[delete("/delete/{key}")]
 async fn delete_handler(engine: web::Data<Arc<Engine>>, key: web::Path<String>) -> impl Responder {
-    if let Err(e) = engine.delete(&Bytes::from(key.to_string())) {
-        if e != AppError::KeyIsEmpty {
-            return HttpResponse::InternalServerError().body("failed to delete value in engine");
-        }
+    if let Err(e) = engine.delete(&Bytes::from(key.to_string()))
+        && e != AppError::KeyIsEmpty
+    {
+        return HttpResponse::InternalServerError().body("failed to delete value in engine");
     };
     HttpResponse::Ok().body("OK")
 }

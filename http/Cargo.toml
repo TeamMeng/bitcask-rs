@@ -2,6 +2,7 @@
 name = "http"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 actix-web = "4.13.0"

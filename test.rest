@@ -1,0 +1,24 @@
+### invalid get
+GET http://localhost:8080/bitcask/get/name3
+
+
+### put
+POST http://localhost:8080/bitcask/put
+Content-Type: application/json
+
+{
+    "name1": "value1",
+    "name2": "value2"
+}
+
+### get
+GET http://localhost:8080/bitcask/get/name1
+
+### list keys
+GET http://localhost:8080/bitcask/listkeys
+
+### delete
+DELETE http://localhost:8080/bitcask/delete/name1
+
+### stat
+GET http://localhost:8080/bitcask/stat
