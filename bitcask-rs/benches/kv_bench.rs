@@ -84,7 +84,7 @@ fn benchmark_delete(c: &mut Criterion) {
     let mut rng = rand::rng();
     let mut nums: Vec<u32> = (0..u32::MAX).collect();
 
-    c.bench_function("bitcask-get-bench", |b| {
+    c.bench_function("bitcask-delete-bench", |b| {
         b.iter(|| {
             nums.shuffle(&mut rng);
             let num = nums.choose(&mut rng);
