@@ -7,7 +7,7 @@ license = "MIT"
 [dependencies]
 actix-web = "4.13.0"
 anyhow = "1.0.102"
-bitcask-rs = { version = "0.1.0", path = "../bitcask-rs" }
+bitcask-rs = { workspace = true }
 quote = "1.0.44"
 serde = { workspace = true }
 serde_json = { workspace = true }

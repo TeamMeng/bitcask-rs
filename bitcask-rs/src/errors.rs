@@ -106,4 +106,7 @@ pub enum AppError {
 
     #[error("failed to copy dir")]
     FailedToCopyDir,
+
+    #[error("wrong operation against a key holding the wrong king of value")]
+    WrongTypeOperation,
 }
