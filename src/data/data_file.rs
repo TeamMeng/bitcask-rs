@@ -192,7 +192,7 @@ impl DataFile {
         self.io_manager = new_io_manager(
             get_data_file_name(&dir_path, self.get_file_id()),
             io_type,
-            true,
+            false,
         )
     }
 }

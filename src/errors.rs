@@ -94,4 +94,13 @@ pub enum AppError {
 
     #[error("failed to unlock file")]
     FailedToUnlockFile,
+
+    #[error("invalid merge ratio, must between 0 and 1")]
+    InvalidMergeRatio,
+
+    #[error("do not reach the merge ratio")]
+    MergeRatioUnreached,
+
+    #[error("disk space is not enough of merge")]
+    MergeNoEnoughSpace,
 }

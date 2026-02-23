@@ -1,2 +1,0 @@
-            engine.seq_no.store(seq_no, Ordering::SeqCst);
-            engine.seq_file_exists = exists;

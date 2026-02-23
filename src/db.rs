@@ -8,6 +8,7 @@ use crate::{
     index::{self, new_indexer},
     merge::load_merge_files,
     options::{IOType, IndexType, Options},
+    util::file::dir_dis_size,
 };
 use bytes::Bytes;
 use fs2::FileExt;
@@ -53,6 +54,21 @@ pub struct Engine {
     lock_file: File,
     /// 累计写入了多少字节
     bytes_write: Arc<AtomicUsize>,
+    /// 累计有多少空间可以 merge
+    pub(crate) reclaim_size: Arc<AtomicUsize>,
+}
+
+/// 存储引擎相关统计信息
+#[derive(Debug)]
+pub struct Stat {
+    /// key 的总数量
+    pub key_num: usize,
+    /// 数据文件的数量
+    pub data_file_num: usize,
+    /// 可以回收的数据量
+    pub reclaim_size: usize,
+    /// 占据的磁盘空间大小
+    pub disk_size: u64,
 }
 
 impl Engine {
@@ -112,10 +128,10 @@ impl Engine {
 
         // 将旧的数据文件保存到 older_files 中
         let mut older_files = HashMap::new();
-        while let Some(file) = data_file.pop()
-            && data_file.len() > 1
-        {
-            older_files.insert(file.get_file_id(), file);
+        while data_file.len() > 1 {
+            if let Some(file) = data_file.pop() {
+                older_files.insert(file.get_file_id(), file);
+            }
         }
 
         // 拿到当前活跃文件
@@ -141,6 +157,7 @@ impl Engine {
             is_initial,
             lock_file,
             bytes_write: Arc::new(AtomicUsize::new(0)),
+            reclaim_size: Arc::new(AtomicUsize::new(0)),
         };
 
         // B+树则不需要从数据文件中加载索引
@@ -194,7 +211,11 @@ impl Engine {
         let log_record_pos = self.append_log_record(&log_record)?;
 
         // 更新内存索引
-        self.index.put(key.to_vec(), log_record_pos);
+        if let Some(old_pos) = self.index.put(key.to_vec(), log_record_pos) {
+            self.reclaim_size
+                .fetch_add(old_pos.size as _, Ordering::SeqCst);
+        }
+
         Ok(())
     }
 
@@ -256,11 +277,13 @@ impl Engine {
         let log_record = LogRecord::new(key.to_vec(), Default::default(), LogRecordType::Delete);
 
         // 写入到数据文件当中
-        self.append_log_record(&log_record)?;
+        let pos = self.append_log_record(&log_record)?;
+        self.reclaim_size.fetch_add(pos.size as _, Ordering::SeqCst);
 
         // 删除内存索引中对应的 key
-        if !self.index.delete(key) {
-            return Err(AppError::IndexUpdateFailed);
+        if let Some(old_pos) = self.index.delete(key) {
+            self.reclaim_size
+                .fetch_add(old_pos.size as _, Ordering::SeqCst);
         }
 
         Ok(())
@@ -269,6 +292,19 @@ impl Engine {
     /// 将活跃数据文件的数据持久化到磁盘
     pub fn sync(&self) -> Result<(), AppError> {
         self.active_file.read().sync()
+    }
+
+    /// 获取数据库统计信息
+    pub fn stat(&self) -> Result<Stat, AppError> {
+        let keys = self.list_keys();
+        let old_files = self.older_files.read();
+
+        Ok(Stat {
+            key_num: keys.len(),
+            data_file_num: old_files.len() + 1,
+            reclaim_size: self.reclaim_size.load(Ordering::SeqCst),
+            disk_size: dir_dis_size(self.options.dir_path.clone()),
+        })
     }
 
     /// 关闭存储引擎，将数据持久化到磁盘。文件句柄等资源在 Engine 被 drop 时自动释放
@@ -349,7 +385,11 @@ impl Engine {
         }
 
         // 构造数据索引信息
-        Ok(LogRecordPos::new(active_file.get_file_id(), write_off))
+        Ok(LogRecordPos::new(
+            active_file.get_file_id(),
+            write_off,
+            en_record.len() as _,
+        ))
     }
 
     /// 从数据文件中加载内存索引，遍历数据文件中的内存，并依次处理其中的记录
@@ -414,7 +454,7 @@ impl Engine {
                 // 解析 key，拿到实际的 key 和 seq_no
                 let (real_key, seq_no) = parse_log_record_key(log_record.key.clone())?;
                 // 构建内存索引
-                let log_record_pos = LogRecordPos::new(*file_id, offset);
+                let log_record_pos = LogRecordPos::new(*file_id, offset, size as _);
                 // 非事务提交的情况，直接更新内存索引
                 if seq_no == NON_TRANSACTION_SEQ_NO {
                     self.update_index(real_key, log_record.rec_type, log_record_pos);
@@ -462,11 +502,18 @@ impl Engine {
     /// 加载索引时更新内存数据
     fn update_index(&self, key: Vec<u8>, rec_type: LogRecordType, pos: LogRecordPos) {
         if rec_type == LogRecordType::Delete {
-            self.index.delete(&key);
+            let mut size = pos.size;
+            if let Some(old_pos) = self.index.delete(&key) {
+                size += old_pos.size;
+            }
+            self.reclaim_size.fetch_add(size as _, Ordering::SeqCst);
         };
 
-        if rec_type == LogRecordType::Normal {
-            self.index.put(key, pos);
+        if rec_type == LogRecordType::Normal
+            && let Some(old_pos) = self.index.put(key, pos)
+        {
+            self.reclaim_size
+                .fetch_add(old_pos.size as _, Ordering::SeqCst);
         };
     }
 
@@ -512,6 +559,10 @@ fn check_options(opts: &Options) -> Result<(), AppError> {
         return Err(AppError::DataFileSizeTooSmall);
     }
 
+    if opts.data_file_merge_ratio < 0.0 || opts.data_file_merge_ratio > 1.0 {
+        return Err(AppError::InvalidMergeRatio);
+    }
+
     Ok(())
 }
 
@@ -548,12 +599,13 @@ fn load_data_files(dir_path: PathBuf, use_mmap: bool) -> Result<Vec<DataFile>, A
     // 对文件 id 进行排序，从小到大进行加载
     file_ids.sort();
     // 遍历所有文件 id，依次打开对应的数据文件
-    for file_id in file_ids {
+    for (idx, file_id) in file_ids.iter().enumerate() {
         let mut io_type = IOType::StandardFIO;
-        if use_mmap {
+        // 只对旧文件使用 mmap，最后一个文件（active_file）始终使用 StandardFIO
+        if use_mmap && idx < file_ids.len() - 1 {
             io_type = IOType::MemoryMap;
         }
-        data_files.push(DataFile::open(dir_path.clone(), file_id, io_type)?);
+        data_files.push(DataFile::open(dir_path.clone(), *file_id, io_type)?);
     }
 
     Ok(data_files)

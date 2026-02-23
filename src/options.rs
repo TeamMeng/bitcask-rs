@@ -15,6 +15,8 @@ pub struct Options {
     pub index_type: IndexType,
     /// 是否用 mmap 打开数据库
     pub mmap_at_startup: bool,
+    /// 执行数据文件 merge 的阈值
+    pub data_file_merge_ratio: f32,
 }
 
 /// 索引迭代器配置项
@@ -72,6 +74,7 @@ impl Default for Options {
             sync_writes: false,
             index_type: IndexType::BTree,
             mmap_at_startup: true,
+            data_file_merge_ratio: 0.5,
         }
     }
 }

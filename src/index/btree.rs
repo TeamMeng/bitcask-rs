@@ -21,18 +21,17 @@ impl BTree {
 }
 
 impl Indexer for BTree {
-    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> bool {
-        self.tree.write().insert(key, pos);
-        true
+    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> Option<LogRecordPos> {
+        self.tree.write().insert(key, pos)
     }
 
     fn get(&self, key: &[u8]) -> Option<LogRecordPos> {
         self.tree.read().get(key).copied()
     }
 
-    fn delete(&self, key: &[u8]) -> bool {
+    fn delete(&self, key: &[u8]) -> Option<LogRecordPos> {
         // 存在 true，则 false 无效数据
-        self.tree.write().remove(key).is_some()
+        self.tree.write().remove(key)
     }
 
     fn list_keys(&self) -> Vec<Bytes> {
@@ -122,10 +121,10 @@ mod tests {
         assert!(ret.is_none());
         // invalid delete
         let ret = btree.delete("non exists".as_bytes());
-        assert!(!ret);
+        assert!(ret.is_none());
 
         // put
-        btree.put("111".as_bytes().to_vec(), LogRecordPos::new(1, 10));
+        btree.put("111".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
 
         // valid get
         let ret = btree.get("111".as_bytes()).is_some_and(|log_record_pos| {
@@ -133,9 +132,23 @@ mod tests {
         });
         assert!(ret);
 
-        // valid delete
-        let ret = btree.delete("111".as_bytes());
+        // new put
+        let pos = btree.put("111".as_bytes().to_vec(), LogRecordPos::new(2, 20, 0));
+        assert!(pos.is_some_and(|v| v.file_id == 1 && v.offset == 10));
+        let ret = btree.get("111".as_bytes()).is_some_and(|log_record_pos| {
+            log_record_pos.file_id == 2 && log_record_pos.offset == 20
+        });
         assert!(ret);
+
+        // valid delete
+        let ret = btree
+            .delete("111".as_bytes())
+            .is_some_and(|v| v.file_id == 2 && v.offset == 20);
+        assert!(ret);
+
+        // valid delete before new put
+        let pos = btree.put("111".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
+        assert!(pos.is_none());
     }
 
     #[test]
@@ -150,7 +163,7 @@ mod tests {
         assert!(ret.is_none());
 
         // 有一条数据的情况
-        bt.put("ccde".as_bytes().to_vec(), LogRecordPos::new(1, 10));
+        bt.put("ccde".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
         let mut iter = bt.iterator(IteratorOptions::default());
         // seek 一个比 ccde 小的值
         iter.seek("aa".as_bytes());
@@ -165,9 +178,9 @@ mod tests {
         assert!(ret);
 
         // 多条数据
-        bt.put("bbed".as_bytes().to_vec(), LogRecordPos::new(1, 10));
-        bt.put("aaed".as_bytes().to_vec(), LogRecordPos::new(1, 10));
-        bt.put("cadd".as_bytes().to_vec(), LogRecordPos::new(1, 10));
+        bt.put("bbed".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
+        bt.put("aaed".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
+        bt.put("cadd".as_bytes().to_vec(), LogRecordPos::new(1, 10, 0));
 
         let mut iter = bt.iterator(IteratorOptions::default());
         iter.seek("b".as_bytes());

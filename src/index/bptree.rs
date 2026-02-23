@@ -4,7 +4,7 @@ use crate::{
     options::IteratorOptions,
 };
 use bytes::Bytes;
-use jammdb::{DB, Error};
+use jammdb::DB;
 use log::error;
 use std::{path::PathBuf, sync::Arc};
 
@@ -32,23 +32,29 @@ impl BPlusTree {
 }
 
 impl Indexer for BPlusTree {
-    fn put(&self, key: Vec<u8>, pos: crate::data::log_record::LogRecordPos) -> bool {
+    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> Option<LogRecordPos> {
         let tx = self.tree.tx(true).expect("failed to begin tx");
         let Ok(bucket) = tx.get_bucket(BPTREE_BUCKET_NAME) else {
             error!("failed to get bucket");
-            return false;
+            return None;
         };
 
-        if bucket.put(key, pos.encode()).is_err() {
-            error!("failed to put value in bptree");
-            return false;
-        }
-        if tx.commit().is_err() {
-            error!("failed to commit");
-            return false;
+        let mut ret = None;
+        if let Some(kv) = bucket.get_kv(&key) {
+            ret = Some(decode_log_record_pos(kv.value().to_vec()));
         }
 
-        true
+        // put 新值
+        bucket
+            .put(key, pos.encode())
+            .expect("failed to put value in bptree");
+
+        if tx.commit().is_err() {
+            error!("failed to commit");
+            return None;
+        }
+
+        ret
     }
 
     fn get(&self, key: &[u8]) -> Option<LogRecordPos> {
@@ -65,25 +71,27 @@ impl Indexer for BPlusTree {
         None
     }
 
-    fn delete(&self, key: &[u8]) -> bool {
+    fn delete(&self, key: &[u8]) -> Option<LogRecordPos> {
         let tx = self.tree.tx(true).expect("failed to begin tx");
         let Ok(bucket) = tx.get_bucket(BPTREE_BUCKET_NAME) else {
             error!("failed to get bucket");
-            return false;
+            return None;
         };
 
-        if let Err(e) = bucket.delete(key)
-            && e == Error::KeyValueMissing
-        {
-            return false;
+        let mut ret = None;
+
+        if let Ok(kv) = bucket.delete(key) {
+            ret = Some(decode_log_record_pos(kv.value().to_vec()));
+        } else {
+            return ret;
         }
 
         if tx.commit().is_err() {
             error!("failed to commit");
-            return false;
+            return None;
         }
 
-        true
+        ret
     }
 
     fn list_keys(&self) -> Vec<bytes::Bytes> {
@@ -185,13 +193,13 @@ mod tests {
 
         // invalid delete
         let ret = bptree.delete("aacd".as_bytes());
-        assert!(!ret);
+        assert!(ret.is_none());
 
         // invalid get
         let ret = bptree.get("aacd".as_bytes());
         assert!(ret.is_none());
 
-        bptree.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        bptree.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         // valid get
         let ret = bptree
@@ -200,16 +208,18 @@ mod tests {
         assert!(ret);
 
         // valid delete
-        let ret = bptree.delete("aacd".as_bytes());
+        let ret = bptree
+            .delete("aacd".as_bytes())
+            .is_some_and(|v| v.file_id == 1123 && v.offset == 1232);
         assert!(ret);
 
         // valid delete before get
         let ret = bptree.get("aacd".as_bytes());
         assert!(ret.is_none());
 
-        bptree.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        bptree.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        bptree.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        bptree.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        bptree.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        bptree.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         // get list keys
         let keys = bptree.list_keys();
@@ -221,6 +231,14 @@ mod tests {
             ],
             keys
         );
+
+        // new put
+        bptree.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1, 1, 0));
+        let ret = bptree
+            .get("acdd".as_bytes())
+            .is_some_and(|v| v.file_id == 1 && v.offset == 1 && v.size == 0);
+        assert!(ret);
+
         fs::remove_dir_all(dir_path)?;
         Ok(())
     }
@@ -237,10 +255,10 @@ mod tests {
         let ret = iter.next();
         assert!(ret.is_none());
 
-        bptree.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        bptree.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        bptree.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        bptree.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        bptree.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        bptree.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        bptree.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        bptree.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         let mut iter = bptree.iterator(IteratorOptions::default());
 

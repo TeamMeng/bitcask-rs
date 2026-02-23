@@ -2,25 +2,24 @@ pub mod bptree;
 pub mod btree;
 pub mod skiplist;
 
-use std::path::PathBuf;
-
 use crate::{
     data::log_record::LogRecordPos,
     index::{bptree::BPlusTree, btree::BTree, skiplist::SkipList},
     options::{IndexType, IteratorOptions},
 };
 use bytes::Bytes;
+use std::path::PathBuf;
 
 /// 抽象索引接口，如果想要接入其他的数据结构，直接实现这个接口即可
 pub trait Indexer: Sync + Send {
     /// 向索引中存储 key 对应的数据位置信息
-    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> bool;
+    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> Option<LogRecordPos>;
 
     /// 根据 key 取出对应的索引位置信息
     fn get(&self, key: &[u8]) -> Option<LogRecordPos>;
 
     /// 根据 key 删除对应的索引位置信息
-    fn delete(&self, key: &[u8]) -> bool;
+    fn delete(&self, key: &[u8]) -> Option<LogRecordPos>;
 
     /// 获取索引存储的所有 key
     fn list_keys(&self) -> Vec<Bytes>;

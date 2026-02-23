@@ -2,17 +2,18 @@ use crate::{
     batch::{NON_TRANSACTION_SEQ_NO, log_record_key_with_seq, parse_log_record_key},
     data::{
         data_file::{
-            DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME, SEQ_NO_FILE_NAME,
-            get_data_file_name,
+            DATA_FILE_NAME_SUFFIX, DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME,
+            SEQ_NO_FILE_NAME, get_data_file_name,
         },
         log_record::{LogRecord, LogRecordType, decode_log_record_pos},
     },
     db::{Engine, FILE_LOCK_NAME},
     errors::AppError,
     options::{IOType, Options},
+    util::file::{available_disk_size, dir_dis_size},
 };
 use log::error;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::atomic::Ordering};
 
 const MERGE_DIR_NAME: &str = "merge";
 const MERGE_FIN_KEY: &[u8] = "merge.finished".as_bytes();
@@ -20,10 +21,27 @@ const MERGE_FIN_KEY: &[u8] = "merge.finished".as_bytes();
 impl Engine {
     /// merge 数据目录，处理无效数据，并生成 hint 索引文件
     pub fn merge(&self) -> Result<(), AppError> {
+        // 如果是空的数据库则直接返回
+        if self.is_empty_engine() {
+            return Ok(());
+        }
         // 如果正在 merge，则直接返回
         let lock = self.merging_lock.try_lock();
         if lock.is_none() {
             return Err(AppError::MergeInProgress);
+        }
+
+        // 判断是否达到量 merge 的比例阈值
+        let reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
+        let total_size = dir_dis_size(self.options.dir_path.clone());
+        if (reclaim_size as f32 / total_size as f32) < self.options.data_file_merge_ratio {
+            return Err(AppError::InvalidMergeRatio);
+        }
+
+        // 判断磁盘剩余空间是否足够 merge 之后的数据
+        let availdable_size = available_disk_size();
+        if total_size - reclaim_size as u64 >= availdable_size {
+            return Err(AppError::MergeNoEnoughSpace);
         }
 
         let merge_path = get_merge_path(self.options.dir_path.clone())?;
@@ -46,6 +64,7 @@ impl Engine {
         let merge_db_opts = Options {
             dir_path: merge_path.clone(),
             data_file_size: self.options.data_file_size,
+            mmap_at_startup: false,
             ..Default::default()
         };
         // 打开 hint 文件存储索引
@@ -85,6 +104,10 @@ impl Engine {
         merge_db.sync()?;
         hint_file.sync()?;
 
+        // 显式关闭 merge_db，释放文件句柄
+        drop(merge_db);
+        drop(hint_file);
+
         // 拿到最近未参与 merge 的文件 id
         let non_merge_file_id = match merge_files.last() {
             Some(data_file) => data_file.get_file_id() + 1,
@@ -103,6 +126,13 @@ impl Engine {
         merge_fin_file.sync()?;
 
         Ok(())
+    }
+
+    fn is_empty_engine(&self) -> bool {
+        let active_file = self.active_file.read();
+        let older_files = self.older_files.read();
+
+        active_file.get_write_off() == 0 && older_files.is_empty()
     }
 
     fn ratate_merge_files(&self) -> Result<Vec<DataFile>, AppError> {
@@ -209,6 +239,12 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<(), AppError> {
             if file_name.ends_with(FILE_LOCK_NAME) {
                 continue;
             }
+
+            // 数据文件容量为空则跳过
+            let meta = entry.metadata().expect("failed to get metadata");
+            if file_name.ends_with(DATA_FILE_NAME_SUFFIX) && meta.len() == 0 {
+                continue;
+            }
         }
         merge_file_names.push(entry.file_name());
     }
@@ -236,7 +272,7 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<(), AppError> {
 
     // 将旧的数据文件删除
     for fid in 0..non_merge_fid {
-        let file = get_data_file_name(&merge_path, fid);
+        let file = get_data_file_name(&dir_path, fid);
         if file.is_file() && fs::remove_file(&file).is_err() {
             return Err(AppError::FailedToDeleteFile);
         }
@@ -246,7 +282,8 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<(), AppError> {
     for file_name in merge_file_names {
         let src_path = merge_path.join(file_name.clone());
         let dest_path = dir_path.join(file_name.clone());
-        if fs::rename(src_path, dest_path).is_err() {
+        if let Err(e) = fs::rename(&src_path, &dest_path) {
+            eprintln!("failed to rename {:?} to {:?}: {}", src_path, dest_path, e);
             return Err(AppError::FailedToRename);
         }
     }

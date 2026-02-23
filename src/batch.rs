@@ -116,11 +116,19 @@ impl WriteBatch<'_> {
         // 数据全部写完之后更新内存索引
         for (_, item) in pending_writes.iter() {
             if let Some(record_pos) = positions.get(&item.key) {
-                if item.rec_type == LogRecordType::Normal {
-                    self.engine.index.put(item.key.clone(), *record_pos);
+                if item.rec_type == LogRecordType::Normal
+                    && let Some(old_pos) = self.engine.index.put(item.key.clone(), *record_pos)
+                {
+                    self.engine
+                        .reclaim_size
+                        .fetch_add(old_pos.size as _, Ordering::SeqCst);
                 }
-                if item.rec_type == LogRecordType::Delete {
-                    self.engine.index.delete(&item.key);
+                if item.rec_type == LogRecordType::Delete
+                    && let Some(old_pos) = self.engine.index.delete(&item.key)
+                {
+                    self.engine
+                        .reclaim_size
+                        .fetch_add(old_pos.size as _, Ordering::SeqCst);
                 }
             }
         }

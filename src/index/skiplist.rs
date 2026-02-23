@@ -28,9 +28,13 @@ impl SkipList {
 }
 
 impl Indexer for SkipList {
-    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> bool {
+    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> Option<LogRecordPos> {
+        let mut result = None;
+        if let Some(entry) = self.skl.get(&key) {
+            result = Some(*entry.value());
+        }
         self.skl.insert(key, pos);
-        true
+        result
     }
 
     fn get(&self, key: &[u8]) -> Option<LogRecordPos> {
@@ -40,8 +44,11 @@ impl Indexer for SkipList {
         None
     }
 
-    fn delete(&self, key: &[u8]) -> bool {
-        self.skl.remove(key).is_some()
+    fn delete(&self, key: &[u8]) -> Option<LogRecordPos> {
+        if let Some(entry) = self.skl.remove(key) {
+            return Some(*entry.value());
+        }
+        None
     }
 
     fn list_keys(&self) -> Vec<bytes::Bytes> {
@@ -120,13 +127,13 @@ mod tests {
 
         // invalid delete
         let ret = skl.delete("aacd".as_bytes());
-        assert!(!ret);
+        assert!(ret.is_none());
 
         // invalid get
         let ret = skl.get("aacd".as_bytes());
         assert!(ret.is_none());
 
-        skl.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        skl.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         // valid get
         let ret = skl
@@ -135,16 +142,18 @@ mod tests {
         assert!(ret);
 
         // valid delete
-        let ret = skl.delete("aacd".as_bytes());
+        let ret = skl
+            .delete("aacd".as_bytes())
+            .is_some_and(|v| v.file_id == 1123 && v.offset == 1232);
         assert!(ret);
 
         // valid delete before get
         let ret = skl.get("aacd".as_bytes());
         assert!(ret.is_none());
 
-        skl.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        skl.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        skl.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        skl.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        skl.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        skl.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         // get list keys
         let keys = skl.list_keys();
@@ -156,6 +165,13 @@ mod tests {
             ],
             keys
         );
+
+        // new put
+        skl.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1, 1, 0));
+        let ret = skl
+            .get("acdd".as_bytes())
+            .is_some_and(|v| v.file_id == 1 && v.offset == 1);
+        assert!(ret);
     }
 
     #[test]
@@ -168,10 +184,10 @@ mod tests {
         let ret = iter.next();
         assert!(ret.is_none());
 
-        skl.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        skl.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        skl.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
-        skl.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232));
+        skl.put("aacd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        skl.put("acdd".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        skl.put("bbae".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
+        skl.put("ddee".as_bytes().to_vec(), LogRecordPos::new(1123, 1232, 0));
 
         let mut iter = skl.iterator(IteratorOptions::default());
 

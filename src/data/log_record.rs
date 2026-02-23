@@ -20,6 +20,8 @@ pub struct LogRecordPos {
     pub(crate) file_id: u32,
     /// 偏移量
     pub(crate) offset: u64,
+    /// 数据在磁盘上的占据的空间大小
+    pub(crate) size: u32,
 }
 
 /// 数据类型
@@ -64,8 +66,12 @@ pub fn decode_log_record_pos(pos: Vec<u8>) -> LogRecordPos {
         Ok(offset) => offset,
         Err(e) => panic!("decode log record pos err: {}", e),
     };
+    let size = match decode_varint(&mut buf) {
+        Ok(offset) => offset,
+        Err(e) => panic!("decode log record pos err: {}", e),
+    };
 
-    LogRecordPos::new(file_id as _, offset)
+    LogRecordPos::new(file_id as _, offset, size as _)
 }
 
 impl LogRecord {
@@ -133,14 +139,19 @@ impl LogRecord {
 }
 
 impl LogRecordPos {
-    pub fn new(file_id: u32, offset: u64) -> Self {
-        Self { file_id, offset }
+    pub fn new(file_id: u32, offset: u64, size: u32) -> Self {
+        Self {
+            file_id,
+            offset,
+            size,
+        }
     }
 
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = BytesMut::new();
         encode_varint(self.file_id as u64, &mut buf);
         encode_varint(self.offset, &mut buf);
+        encode_varint(self.size as _, &mut buf);
         buf.to_vec()
     }
 }

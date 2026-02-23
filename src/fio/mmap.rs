@@ -67,7 +67,9 @@ impl IOManager for MMapIo {
     }
 
     fn sync(&self) -> Result<(), AppError> {
-        unimplemented!()
+        // MMap 是只读映射，不需要显式同步
+        // 对于只读 mmap，内核会自动管理页面缓存
+        Ok(())
     }
 
     fn size(&self) -> u64 {
