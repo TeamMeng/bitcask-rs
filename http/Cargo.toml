@@ -1,0 +1,14 @@
+[package]
+name = "http"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4.13.0"
+anyhow = "1.0.102"
+bitcask-rs = { version = "0.1.0", path = "../bitcask-rs" }
+quote = "1.0.44"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { version = "0.1.44", features = ["log"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
