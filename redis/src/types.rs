@@ -1,4 +1,4 @@
-use crate::meta::{Metadate, decode_metadata};
+use crate::meta::{HashInternalKey, Metadate, SetInternalKey, decode_metadata};
 use bitcask_rs::{
     db::Engine,
     errors::AppError,
@@ -23,20 +23,13 @@ pub struct RedisDataStructure {
     pub(crate) engine: Engine,
 }
 
-pub(crate) struct HashInternalKey {
-    pub(crate) key: Vec<u8>,
-    pub(crate) version: u128,
-    pub(crate) field: Vec<u8>,
-}
-
 impl RedisDataStructure {
     pub fn new(options: Options) -> Result<Self, AppError> {
         Ok(Self {
             engine: Engine::open(options)?,
         })
     }
-
-    /// String 数据结构
+    /// ================= String 数据结构 ==================
     pub fn set(&self, key: &str, value: &str, ttl: Duration) -> Result<(), AppError> {
         if value.is_empty() {
             return Ok(());
@@ -84,7 +77,7 @@ impl RedisDataStructure {
         Ok(Some(String::from_utf8(value).unwrap()))
     }
 
-    /// Hash 数据结构
+    /// ================= Hash 数据结构 ==================
     pub fn hset(&self, key: &str, field: &str, value: &str) -> Result<bool, AppError> {
         // 查询元数据
         let mut meta = self.find_metadata(key, RedisDataType::Hash)?;
@@ -216,6 +209,86 @@ impl RedisDataStructure {
 
         Ok(meta.unwrap())
     }
+
+    /// ================= Set 数据结构 ==================
+    pub fn sadd(&self, key: &str, members: &str) -> Result<bool, AppError> {
+        // 查找元数据
+        let mut meta = self.find_metadata(key, RedisDataType::Set)?;
+
+        // 构造数据部分的 key
+        let sk = SetInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            member: members.as_bytes().to_vec(),
+        };
+
+        if let Err(e) = self.engine.get(&sk.encode()) {
+            // 不存在则更新
+            if e == AppError::KeyNotFound {
+                // 更新元数据
+                let wb = self.engine.new_write_batch(WriteBatchOptions::default())?;
+                meta.size += 1;
+                wb.put(Bytes::copy_from_slice(key.as_bytes()), meta.encode())?;
+                // 更新数据部分
+                wb.put(sk.encode(), Bytes::new())?;
+                wb.commit()?;
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub fn s_is_member(&self, key: &str, member: &str) -> Result<bool, AppError> {
+        let meta = self.find_metadata(key, RedisDataType::Set)?;
+        if meta.size == 0 {
+            return Ok(false);
+        }
+
+        // 构造数据部分的 key
+        let sk = SetInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            member: member.as_bytes().to_vec(),
+        };
+
+        match self.engine.get(&sk.encode()) {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if e != AppError::KeyNotFound {
+                    return Err(e);
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    pub fn srem(&self, key: &str, member: &str) -> Result<bool, AppError> {
+        let mut meta = self.find_metadata(key, RedisDataType::Set)?;
+        if meta.size == 0 {
+            return Ok(false);
+        }
+
+        // 构造数据部分的 key
+        let sk = SetInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            member: member.as_bytes().to_vec(),
+        };
+
+        if self.engine.get(&sk.encode()).is_ok() {
+            // 更新元数据
+            meta.size -= 1;
+            let wb = self.engine.new_write_batch(WriteBatchOptions::default())?;
+            wb.put(Bytes::copy_from_slice(key.as_bytes()), meta.encode())?;
+            // 写数据部分
+            wb.delete(sk.encode())?;
+            wb.commit()?;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
 }
 
 impl From<u8> for RedisDataType {
@@ -228,18 +301,6 @@ impl From<u8> for RedisDataType {
             4 => RedisDataType::ZSet,
             _ => panic!("invalid redis data type"),
         }
-    }
-}
-
-impl HashInternalKey {
-    pub(crate) fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-
-        buf.extend_from_slice(&self.key);
-        buf.put_u128(self.version);
-        buf.extend_from_slice(&self.field);
-
-        buf.into()
     }
 }
 
@@ -312,6 +373,39 @@ mod tests {
         let ret = rds
             .hget("myhash", "field-not-exist")
             .is_ok_and(|v| v.is_none());
+        assert!(ret);
+
+        fs::remove_dir_all(opts.dir_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn redis_s_should_work() -> Result<()> {
+        let opts = Options {
+            dir_path: PathBuf::from("/tmp/bitcask-rs-redis-s"),
+            ..Default::default()
+        };
+        let rds = RedisDataStructure::new(opts.clone())?;
+
+        let ret = rds.srem("myset", "val-1").is_ok_and(|v| !v);
+        assert!(ret);
+
+        rds.sadd("myset", "val-1")?;
+        let ret = rds.sadd("myset", "val-1").is_ok_and(|v| !v);
+        assert!(ret);
+        rds.sadd("myset", "val-2")?;
+
+        let ret = rds.s_is_member("myset-1", "val-1").is_ok_and(|v| !v);
+        assert!(ret);
+        let ret = rds.s_is_member("myset", "val-1")?;
+        assert!(ret);
+        let ret = rds.s_is_member("myset", "val-2")?;
+        assert!(ret);
+        let ret = rds.s_is_member("myset", "val-not-exist").is_ok_and(|v| !v);
+        assert!(ret);
+
+        rds.srem("myset", "val-1")?;
+        let ret = rds.s_is_member("myset", "val-1").is_ok_and(|v| !v);
         assert!(ret);
 
         fs::remove_dir_all(opts.dir_path)?;

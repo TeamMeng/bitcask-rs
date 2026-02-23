@@ -1,6 +1,5 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-
 use crate::types::RedisDataType;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 /// 元数据
 pub(crate) struct Metadate {
@@ -16,6 +15,18 @@ pub(crate) struct Metadate {
     pub(crate) head: u64,
     /// List 专用
     pub(crate) tail: u64,
+}
+
+pub(crate) struct HashInternalKey {
+    pub(crate) key: Vec<u8>,
+    pub(crate) version: u128,
+    pub(crate) field: Vec<u8>,
+}
+
+pub(crate) struct SetInternalKey {
+    pub(crate) key: Vec<u8>,
+    pub(crate) version: u128,
+    pub(crate) member: Vec<u8>,
 }
 
 impl Metadate {
@@ -64,5 +75,30 @@ pub(crate) fn decode_metadata(mut buf: Bytes) -> Metadate {
         size,
         head,
         tail,
+    }
+}
+
+impl HashInternalKey {
+    pub(crate) fn encode(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        buf.extend_from_slice(&self.key);
+        buf.put_u128(self.version);
+        buf.extend_from_slice(&self.field);
+
+        buf.into()
+    }
+}
+
+impl SetInternalKey {
+    pub(crate) fn encode(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        buf.extend_from_slice(&self.key);
+        buf.put_u128(self.version);
+        buf.extend_from_slice(&self.member);
+        buf.put_u32(self.member.len() as u32);
+
+        buf.into()
     }
 }
