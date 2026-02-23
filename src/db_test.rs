@@ -192,4 +192,31 @@ mod tests {
         fs::remove_dir_all(opts.dir_path)?;
         Ok(())
     }
+
+    #[test]
+    fn engine_backup_should_work() -> Result<()> {
+        let opts = Options {
+            dir_path: PathBuf::from("/tmp/bitcask-rs-backup"),
+            ..Default::default()
+        };
+        let engine = Engine::open(opts.clone())?;
+
+        for i in 0..=10000 {
+            engine.put(get_test_key(i), get_test_value(i))?;
+        }
+
+        let back_up = PathBuf::from("/tmp/bitcask-rs-backup-test");
+        engine.backup(back_up.clone())?;
+
+        let opts = Options {
+            dir_path: back_up.clone(),
+            ..Default::default()
+        };
+
+        Engine::open(opts.clone())?;
+
+        fs::remove_dir_all(PathBuf::from("/tmp/bitcask-rs-backup"))?;
+        fs::remove_dir_all(back_up)?;
+        Ok(())
+    }
 }

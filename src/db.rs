@@ -8,7 +8,7 @@ use crate::{
     index::{self, new_indexer},
     merge::load_merge_files,
     options::{IOType, IndexType, Options},
-    util::file::dir_dis_size,
+    util::file::{copy_dir, dir_dis_size},
 };
 use bytes::Bytes;
 use fs2::FileExt;
@@ -305,6 +305,12 @@ impl Engine {
             reclaim_size: self.reclaim_size.load(Ordering::SeqCst),
             disk_size: dir_dis_size(self.options.dir_path.clone()),
         })
+    }
+
+    /// 备份数据目录
+    pub fn backup(&self, dir_path: PathBuf) -> Result<(), AppError> {
+        let exclude = [FILE_LOCK_NAME];
+        copy_dir(self.options.dir_path.clone(), dir_path, &exclude)
     }
 
     /// 关闭存储引擎，将数据持久化到磁盘。文件句柄等资源在 Engine 被 drop 时自动释放

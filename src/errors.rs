@@ -103,4 +103,7 @@ pub enum AppError {
 
     #[error("disk space is not enough of merge")]
     MergeNoEnoughSpace,
+
+    #[error("failed to copy dir")]
+    FailedToCopyDir,
 }
