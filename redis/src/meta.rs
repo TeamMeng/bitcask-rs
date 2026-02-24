@@ -29,6 +29,12 @@ pub(crate) struct SetInternalKey {
     pub(crate) member: Vec<u8>,
 }
 
+pub(crate) struct ListInternalKey {
+    pub(crate) key: Vec<u8>,
+    pub(crate) version: u128,
+    pub(crate) index: u64,
+}
+
 impl Metadate {
     pub(crate) fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
@@ -98,6 +104,18 @@ impl SetInternalKey {
         buf.put_u128(self.version);
         buf.extend_from_slice(&self.member);
         buf.put_u32(self.member.len() as u32);
+
+        buf.into()
+    }
+}
+
+impl ListInternalKey {
+    pub(crate) fn encode(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        buf.extend_from_slice(&self.key);
+        buf.put_u128(self.version);
+        buf.put_u64(self.index);
 
         buf.into()
     }

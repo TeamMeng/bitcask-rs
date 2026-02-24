@@ -1,4 +1,4 @@
-use crate::meta::{HashInternalKey, Metadate, SetInternalKey, decode_metadata};
+use crate::meta::{HashInternalKey, ListInternalKey, Metadate, SetInternalKey, decode_metadata};
 use bitcask_rs::{
     db::Engine,
     errors::AppError,
@@ -289,6 +289,85 @@ impl RedisDataStructure {
 
         Ok(false)
     }
+
+    /// ================= List 数据结构 ==================
+    pub fn lpush(&self, key: &str, element: &str) -> Result<u32, AppError> {
+        self.push_inner(key, element, true)
+    }
+
+    pub fn rpush(&self, key: &str, element: &str) -> Result<u32, AppError> {
+        self.push_inner(key, element, false)
+    }
+
+    pub fn lpop(&self, key: &str) -> Result<Option<String>, AppError> {
+        self.pop_inner(key, true)
+    }
+
+    pub fn rpop(&self, key: &str) -> Result<Option<String>, AppError> {
+        self.pop_inner(key, false)
+    }
+
+    fn push_inner(&self, key: &str, element: &str, is_left: bool) -> Result<u32, AppError> {
+        // 查找元数据
+        let mut meta = self.find_metadata(key, RedisDataType::List)?;
+
+        // 构造数据部分的 key
+        let lk = ListInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            index: match is_left {
+                true => meta.head - 1,
+                false => meta.tail,
+            },
+        };
+
+        // 更新数据和元数据
+        let wb = self.engine.new_write_batch(WriteBatchOptions::default())?;
+        meta.size += 1;
+        if is_left {
+            meta.head -= 1;
+        } else {
+            meta.tail += 1;
+        }
+        wb.put(Bytes::copy_from_slice(key.as_bytes()), meta.encode())?;
+        wb.put(lk.encode(), Bytes::copy_from_slice(element.as_bytes()))?;
+        wb.commit()?;
+
+        Ok(meta.size)
+    }
+
+    fn pop_inner(&self, key: &str, is_left: bool) -> Result<Option<String>, AppError> {
+        // 查询元数据部分
+        let mut meta = self.find_metadata(key, RedisDataType::List)?;
+        if meta.size == 0 {
+            return Ok(None);
+        }
+
+        // 构造数据部分的 key
+        let lk = ListInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            index: match is_left {
+                true => meta.head,
+                false => meta.tail - 1,
+            },
+        };
+
+        let element = self.engine.get(&lk.encode())?;
+
+        // 更新元数据
+        meta.size -= 1;
+        if is_left {
+            meta.head += 1;
+        } else {
+            meta.tail -= 1;
+        }
+
+        self.engine
+            .put(Bytes::copy_from_slice(key.as_bytes()), meta.encode())?;
+
+        Ok(Some(String::from_utf8(element.to_vec()).unwrap()))
+    }
 }
 
 impl From<u8> for RedisDataType {
@@ -406,6 +485,38 @@ mod tests {
 
         rds.srem("myset", "val-1")?;
         let ret = rds.s_is_member("myset", "val-1").is_ok_and(|v| !v);
+        assert!(ret);
+
+        fs::remove_dir_all(opts.dir_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn redis_l_should_work() -> Result<()> {
+        let opts = Options {
+            dir_path: PathBuf::from("/tmp/bitcask-rs-redis-l"),
+            ..Default::default()
+        };
+        let rds = RedisDataStructure::new(opts.clone())?;
+
+        // empty pop
+        let ret = rds.lpop("myList").is_ok_and(|v| v.is_none());
+        assert!(ret);
+        let ret = rds.rpop("myList").is_ok_and(|v| v.is_none());
+        assert!(ret);
+
+        rds.lpush("myList", "aa")?;
+        rds.rpush("myList", "bb")?;
+        rds.rpush("myList", "cc")?;
+
+        let ret = rds
+            .lpop("myList")
+            .is_ok_and(|v| v.is_some_and(|s| s == "aa"));
+        assert!(ret);
+
+        let ret = rds
+            .rpop("myList")
+            .is_ok_and(|v| v.is_some_and(|s| s == "cc"));
         assert!(ret);
 
         fs::remove_dir_all(opts.dir_path)?;
