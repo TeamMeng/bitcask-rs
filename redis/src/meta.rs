@@ -35,6 +35,13 @@ pub(crate) struct ListInternalKey {
     pub(crate) index: u64,
 }
 
+pub(crate) struct ZSetInternalKey {
+    pub(crate) key: Vec<u8>,
+    pub(crate) version: u128,
+    pub(crate) score: f64,
+    pub(crate) member: Vec<u8>,
+}
+
 impl Metadate {
     pub(crate) fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
@@ -116,6 +123,30 @@ impl ListInternalKey {
         buf.extend_from_slice(&self.key);
         buf.put_u128(self.version);
         buf.put_u64(self.index);
+
+        buf.into()
+    }
+}
+
+impl ZSetInternalKey {
+    pub(crate) fn encode_member(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        buf.extend_from_slice(&self.key);
+        buf.put_u128(self.version);
+        buf.extend_from_slice(&self.member);
+
+        buf.into()
+    }
+
+    pub(crate) fn encode_score(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        buf.extend_from_slice(&self.key);
+        buf.put_u128(self.version);
+        buf.extend_from_slice(self.score.to_string().as_bytes());
+        buf.extend_from_slice(&self.member);
+        buf.put_u32(self.member.len() as u32);
 
         buf.into()
     }

@@ -1,4 +1,6 @@
-use crate::meta::{HashInternalKey, ListInternalKey, Metadate, SetInternalKey, decode_metadata};
+use crate::meta::{
+    HashInternalKey, ListInternalKey, Metadate, SetInternalKey, ZSetInternalKey, decode_metadata,
+};
 use bitcask_rs::{
     db::Engine,
     errors::AppError,
@@ -368,6 +370,78 @@ impl RedisDataStructure {
 
         Ok(Some(String::from_utf8(element.to_vec()).unwrap()))
     }
+
+    /// ================= ZSet 数据结构 ==================
+    pub fn zadd(&self, key: &str, score: f64, member: &str) -> Result<bool, AppError> {
+        let mut meta = self.find_metadata(key, RedisDataType::ZSet)?;
+
+        // 构造数据部分的 key
+        let zk = ZSetInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            score,
+            member: member.as_bytes().to_vec(),
+        };
+
+        let mut exist = true;
+        let mut old_score = 0.0;
+        match self.engine.get(&zk.encode_member()) {
+            Ok(val) => {
+                let val = String::from_utf8(val.to_vec()).unwrap();
+                old_score = val.parse().unwrap();
+                if old_score == score {
+                    return Ok(false);
+                }
+            }
+            Err(e) => {
+                if e != AppError::KeyNotFound {
+                    return Err(e);
+                }
+                exist = false;
+            }
+        }
+
+        let wb = self.engine.new_write_batch(WriteBatchOptions::default())?;
+        // 更新元数据部分
+        if !exist {
+            meta.size += 1;
+            wb.put(Bytes::copy_from_slice(key.as_bytes()), meta.encode())?;
+        }
+
+        if exist {
+            let old_zk = ZSetInternalKey {
+                key: key.as_bytes().to_vec(),
+                version: meta.version,
+                score: old_score,
+                member: member.as_bytes().to_vec(),
+            };
+            wb.delete(old_zk.encode_score())?;
+        }
+
+        wb.put(zk.encode_member(), Bytes::from(score.to_string()))?;
+        wb.put(zk.encode_score(), Bytes::new())?;
+        wb.commit()?;
+
+        Ok(!exist)
+    }
+
+    pub fn zscore(&self, key: &str, member: &str) -> Result<f64, AppError> {
+        let meta = self.find_metadata(key, RedisDataType::ZSet)?;
+        if meta.size == 0 {
+            return Ok(-1_f64);
+        }
+
+        // 构造数据部分的 key
+        let zk = ZSetInternalKey {
+            key: key.as_bytes().to_vec(),
+            version: meta.version,
+            score: 0.0,
+            member: member.as_bytes().to_vec(),
+        };
+
+        let score = self.engine.get(&zk.encode_member())?;
+        Ok(String::from_utf8(score.to_vec()).unwrap().parse().unwrap())
+    }
 }
 
 impl From<u8> for RedisDataType {
@@ -517,6 +591,28 @@ mod tests {
         let ret = rds
             .rpop("myList")
             .is_ok_and(|v| v.is_some_and(|s| s == "cc"));
+        assert!(ret);
+
+        fs::remove_dir_all(opts.dir_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn redis_z_should_work() -> Result<()> {
+        let opts = Options {
+            dir_path: PathBuf::from("/tmp/bitcask-rs-redis-z"),
+            ..Default::default()
+        };
+        let rds = RedisDataStructure::new(opts.clone())?;
+
+        rds.zadd("myzset", 12.11, "val-1")?;
+        rds.zadd("myzset", 33.11, "val-1")?;
+        rds.zadd("myzset", 33.99, "val-2")?;
+
+        let ret = rds.zscore("myzset", "val-1").is_ok_and(|v| v == 33.11);
+        assert!(ret);
+
+        let ret = rds.zscore("myzset", "val-2").is_ok_and(|v| v == 33.99);
         assert!(ret);
 
         fs::remove_dir_all(opts.dir_path)?;
