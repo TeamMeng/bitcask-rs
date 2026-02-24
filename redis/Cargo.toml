@@ -9,3 +9,4 @@ anyhow = { workspace = true }
 bitcask-rs = { workspace = true }
 bytes = { workspace = true }
 prost = { workspace = true }
+redcon = "0.1.2"
